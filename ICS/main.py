@@ -1,96 +1,69 @@
-import math
+import random
+from system.rigid_body_nd import RigidBodyND
+from sensors.gyro_nd import GyroND
+from estimators.kalman_nd import KalmanND
+from controllers.pid import PIDND
+# ---------------- CONFIG ----------------
+DT = 0.01
+STEPS = 1000
+N = 2
 
-from system.rigid_body_1d import RigidBody1D
-from sensors.imu import Gyro1D
-from estimators.kalman_gyro_bias_1d import KalmanGyroBias1D
-from controllers.pid import PID
+SETPOINT = [1.0, -0.5]
 
-
-# =====================
-# Parâmetros globais
-# =====================
-dt = 0.01
-steps = 500
-
-SETPOINT = 1.0  # rad/s (velocidade angular desejada)
-
-# =====================
-# Sistema físico
-# =====================
-body = RigidBody1D(
-    omega0=0.0,
-    inertia=1.0
+# ---------------- SYSTEM ----------------
+rb = RigidBodyND(
+    dim=2,
+    inertia=[1.0, 1.0],
+    dt=DT
 )
 
-# =====================
-# Sensor (giroscópio)
-# =====================
-TRUE_BIAS = 0.05
-
-gyro = Gyro1D(
+imu = GyroND(
+    dim=2,
     noise_std=0.05,
-    bias=TRUE_BIAS
+    bias=[0.5, -0.25]
 )
 
-# =====================
-# Estimador (Kalman)
-# =====================
-kf = KalmanGyroBias1D(
-    omega0=0.0,
-    bias0=0.0,
-    P0=1.0,
+kf = KalmanND(
+    dim=2,
     q_omega=1e-3,
     q_bias=1e-6,
-    r_meas=0.05**2
+    r=0.05**2
 )
 
-# =====================
-# Controlador PID
-# =====================
-pid = PID(
-    kp=2.0,
-    ki=0.5,
-    kd=0.1,
-    dt=dt,
-    u_min=-5.0,
-    u_max=5.0
+pid = PIDND(
+    kp=[2.0, 2.0],
+    ki=[0.0, 0.0],
+    kd=[0.1, 0.1],
+    dt=DT
 )
+# ---------------- LOOP ----------------
+for step in range(STEPS):
+    # TRUE dynamics
+    omega_true = rb.omega
 
-# =====================
-# Loop de simulação
-# =====================
-for i in range(steps):
+    # IMU measurement
+    z = imu.read(omega_true)
 
-    # ---------------------------------
-    # Sensor lê o estado verdadeiro
-    # ---------------------------------
-    z = gyro.read(body.omega)
-
-    # ---------------------------------
-    # Estimador
-    # ---------------------------------
+    # Kalman
     kf.predict()
     omega_est, bias_est = kf.update(z)
 
-    # ---------------------------------
-    # Controle (usa estado estimado!)
-    # ---------------------------------
-    torque = pid.compute(SETPOINT, omega_est)
+    # PID error (note o sinal!)
+    error = [
+        omega_est[i] - SETPOINT[i]
+        for i in range(len(SETPOINT))
+    ]
 
-    # ---------------------------------
-    # Dinâmica do sistema
-    # ---------------------------------
-    body.update(torque, dt)
+    torque = pid.step(error)
 
-    # ---------------------------------
-    # Log
-    # ---------------------------------
-    print(
-        f"STEP {i:03d} | "
-        f"SP: {SETPOINT: .2f} | "
-        f"TRUE_OMEGA: {body.omega: .3f} | "
-        f"MEAS: {z: .3f} | "
-        f"EST_OMEGA: {omega_est: .3f} | "
-        f"BIAS_EST: {bias_est: .3f} | "
-        f"TORQUE: {torque: .3f}"
-    )
+    # Apply torque to rigid body
+    rb.apply_torque(torque)
+
+    if step % 10 == 0:
+        print(
+            f"STEP {step:03d} | "
+            f"TRUE: {omega_true} | "
+            f"EST: {omega_est} | "
+            f"BIAS: {bias_est} | "
+            f"TORQUE: {torque}"
+        )

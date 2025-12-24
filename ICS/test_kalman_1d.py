@@ -1,6 +1,6 @@
 import random
 from sensors.imu import IMUSensor
-from ICS.estimators.kalman_gyro_bias_1d import Kalman1D
+from ICS.estimators.kalman_nd import Kalman1D
 
 TRUE_OMEGA = 1.0
 

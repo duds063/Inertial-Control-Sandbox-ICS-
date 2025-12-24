@@ -1,33 +1,27 @@
-class PID:
-    def __init__(self, kp, ki, kd, dt, u_min=None, u_max=None):
+class PIDND:
+    def __init__(self, kp, kd, ki=None, dt=0.01):
         self.kp = kp
-        self.ki = ki
         self.kd = kd
+        self.ki = ki if ki is not None else [0.0] * len(kp)
         self.dt = dt
 
-        self.integral = 0.0
-        self.prev_error = 0.0
+        self.integral = [0.0] * len(kp)
 
-        self.u_min = u_min
-        self.u_max = u_max
+    def step(self, error, error_dot=None):
+        if error_dot is None:
+            error_dot = [0.0] * len(error)
 
-    def compute(self, setpoint, measurement):
-        error = setpoint - measurement
+        torque = []
 
-        self.integral += error * self.dt
-        derivative = (error - self.prev_error) / self.dt
+        for i in range(len(error)):
+            self.integral[i] += error[i] * self.dt
 
-        u = (
-            self.kp * error +
-            self.ki * self.integral +
-            self.kd * derivative
-        )
+            u = (
+                - self.kp[i] * error[i]
+                - self.kd[i] * error_dot[i]
+                - self.ki[i] * self.integral[i]
+            )
 
-        self.prev_error = error
+            torque.append(u)
 
-        if self.u_min is not None:
-            u = max(self.u_min, u)
-        if self.u_max is not None:
-            u = min(self.u_max, u)
-
-        return u
+        return torque
