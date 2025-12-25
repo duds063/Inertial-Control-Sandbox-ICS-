@@ -1,54 +1,71 @@
+import numpy as np
+from math_utils.quaternion import quat_mul, quat_norm
+
 class RigidBodyND:
     def __init__(self, dim, inertia, dt):
-        """
-        Corpo rígido genérico ND (1D, 2D, 3D, ...)
-
-        dim     : int            -> número de dimensões
-        inertia : float | list   -> inércia por eixo
-        dt      : float          -> passo de simulação
-        """
-
         self.dim = dim
         self.dt = dt
 
-        # Inércia por eixo
-        if isinstance(inertia, (int, float)):
-            self.I = [float(inertia)] * dim
-        else:
-            if len(inertia) != dim:
-                raise ValueError("Inertia must have length = dim")
-            self.I = [float(i) for i in inertia]
+        self.I = inertia
+        self.I_inv = [1.0 / i for i in inertia]
 
-        # Estado
-        self.theta = [0.0] * dim
         self.omega = [0.0] * dim
+        self.theta = [0.0] * dim  # integração simples (debug)
 
-    def apply_torque(self, torque):
-        """
-        Aplica torque (vetorial) ao corpo
-        torque : list[float] de tamanho dim
-        """
-        if len(torque) != self.dim:
-            raise ValueError("Torque must have length = dim")
+    def cross(self, a, b):
+        return [
+            a[1]*b[2] - a[2]*b[1],
+            a[2]*b[0] - a[0]*b[2],
+            a[0]*b[1] - a[1]*b[0]
+        ]
 
+    def step(self, torque):
+        if self.dim == 3:
+            Iw = [
+                self.I[0] * self.omega[0],
+                self.I[1] * self.omega[1],
+                self.I[2] * self.omega[2],
+            ]
+
+            gyro = self.cross(self.omega, Iw)
+
+            domega = [
+                self.I_inv[i] * (torque[i] - gyro[i])
+                for i in range(3)
+            ]
+        else:
+            # modelo simplificado (correto para ND ≠ 3)
+            domega = [
+                self.I_inv[i] * torque[i]
+                for i in range(self.dim)
+            ]
+
+        # integração
         for i in range(self.dim):
-            alpha = torque[i] / self.I[i]
-            self.omega[i] += alpha * self.dt
-
-    def update(self):
-        """
-        Integra o estado no tempo
-        """
-        for i in range(self.dim):
+            self.omega[i] += domega[i] * self.dt
             self.theta[i] += self.omega[i] * self.dt
+import numpy as np
 
-        return self.get_state()
+class RigidBody3D:
+    def __init__(self, inertia, dt):
+        self.dt = dt
 
-    def get_state(self):
-        """
-        Retorna uma cópia segura do estado
-        """
-        return {
-            "theta": self.theta.copy(),
-            "omega": self.omega.copy()
-        }
+        inertia = np.array(inertia)
+        self.I = np.diag(inertia)
+        self.I_inv = np.linalg.inv(self.I)
+
+        self.omega = np.zeros(3)
+        self.q = np.array([1.0, 0.0, 0.0, 0.0])
+
+    def step(self, torque):
+        # Dinâmica
+        gyro = np.cross(self.omega, self.I @ self.omega)
+        domega = self.I_inv @ (torque - gyro)
+        self.omega += domega * self.dt
+
+        # Cinemática (quaternion)
+        omega_quat = np.array([0.0, *self.omega])
+        q_dot = 0.5 * quat_mul(self.q, omega_quat)
+
+        self.q += q_dot * self.dt
+        self.q = quat_norm(self.q)

@@ -1,20 +1,17 @@
-from system.rigid_body_nd import RigidBodyND
+from math_utils.quaternion import quat_mul, quat_norm
+import numpy as np
+from system.rigid_body_nd import RigidBody3D
+rb = RigidBody3D(np.array([1.0, 1.0, 1.0]), dt=0.01)
 
-dt = 0.01
-rb = RigidBodyND(
-    dim=1,
-    inertia=1.0,
-    dt=dt
-)
+for i in range(200):
+    rb.apply_torque(np.array([0.1, 0.0, 0.0]))
+    rb.step()
 
-print("=== TESTE 1D ===")
+    print(rb.q)
 
-for step in range(10):
-    rb.apply_torque([1.0])  # torque constante
-    state = rb.update()
+rb = RigidBody3D(np.array([1.0, 2.0, 3.0]), dt=0.01)
+rb.omega = np.array([1.0, 0.5, 0.0])
 
-    print(
-        f"STEP {step:02d} | "
-        f"theta: {state['theta'][0]:.6f} | "
-        f"omega: {state['omega'][0]:.6f}"
-    )
+for i in range(500):
+    rb.step()
+    print(rb.omega)
