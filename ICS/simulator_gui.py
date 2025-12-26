@@ -5,7 +5,11 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from system.rigid_body_nd import RigidBody3D
+from sensors.gyro_nd import GyroND
+from estimators.kalman_nd import KalmanND
 from controllers.pid import PIDND
+from controllers.attitude import AttitudeController
+from math_utils.quaternion import quat_norm
 
 
 class SimulatorGUI:
@@ -19,9 +23,6 @@ class SimulatorGUI:
         self.dt = 0.01
         self.time = 0.0
 
-        self.reaction_steps = 0
-        self.torque_queue = []
-
         # ------------------------
         # System & controller
         # ------------------------
@@ -31,14 +32,32 @@ class SimulatorGUI:
             inertia=self.inertia,
             dt=self.dt
         )
+        self.body.q = quat_norm(np.array([1.0, 0.0, 0.0, 0.0]))
 
+        # Sensors and estimators
+        self.imu = GyroND(dim=3, noise_std=0.05, bias=[0.5, -0.25, 0.1])
+        self.kf = KalmanND(dim=3, q_omega=1e-3, q_bias=1e-6, r=0.05**2)
+
+        # Controllers
+        self.attitude = AttitudeController(kp=6.0, kd=1.2)
+        
         self.pid = PIDND(
-            kp=[2.0, 2.0, 2.0],
-            kd=[0.5, 0.5, 0.5],
+            kp=[6, 6, 6],
+            kd=[0.4, 0.4, 0.4],
             ki=[0.0, 0.0, 0.0],
             dt=self.dt,
             torque_limit=[1.0, 1.0, 1.0]
         )
+
+        # Reference tracking
+        self.omega_ref_prev = np.zeros(3)
+        self.q_ref = np.array([1.0, 0.0, 0.0, 0.0])
+        self.omega_ref_max = 0.5
+        self.slew_rate = 1.0
+        
+        # Ramp time for reaching target omega
+        self.omega_target = np.zeros(3)
+        self.omega_ramp_start_time = 0.0
 
         # ------------------------
         # History
@@ -69,17 +88,19 @@ class SimulatorGUI:
 
             return var
 
-        self.kp = labeled_control("Kp", 0, 10, 2)
-        self.kd = labeled_control("Kd", 0, 5, 0.5)
+        self.kp = labeled_control("Kp", 0, 10, 6)
+        self.kd = labeled_control("Kd", 0, 5, 0.4)
         self.ki = labeled_control("Ki", 0, 5, 0.0)
 
-        self.omega_ref_x = labeled_control("ω_ref X", -3, 3, 0)
-        self.omega_ref_y = labeled_control("ω_ref Y", -3, 3, 0)
-        self.omega_ref_z = labeled_control("ω_ref Z", -3, 3, 0)
+        self.omega_ref_x = labeled_control("ω_ref X", -1, 1, 0)
+        self.omega_ref_y = labeled_control("ω_ref Y", -1, 1, 0)
+        self.omega_ref_z = labeled_control("ω_ref Z", -1, 1, 0.5)
 
         self.torque_limit = labeled_control("Torque limit (Nm)", 0.1, 5, 1)
-        self.omega_limit = labeled_control("Omega limit (rad/s)", 0.5, 10, 2)
-        self.reaction_time = labeled_control("Reaction time (s)", 0, 0.5, 1.5)
+        self.attitude_kp = labeled_control("Attitude Kp", 0, 20, 6)
+        self.attitude_kd = labeled_control("Attitude Kd", 0, 5, 1.2)
+        self.slew_rate = labeled_control("Slew rate (rad/s²)", 0, 5, 1)
+        self.ramp_time = labeled_control("Ramp time (s)", 0, 5, 0.5)
 
         ttk.Button(
             self.controls,
@@ -100,8 +121,13 @@ class SimulatorGUI:
     def reset(self):
         self.time = 0.0
         self.body.reset()
+        self.body.q = quat_norm(np.array([1.0, 0.0, 0.0, 0.0]))
         self.pid.reset()
-        self.torque_queue.clear()
+        self.kf = KalmanND(dim=3, q_omega=1e-3, q_bias=1e-6, r=0.05**2)
+        self.attitude.reset()
+        self.omega_ref_prev = np.zeros(3)
+        self.omega_target = np.zeros(3)
+        self.omega_ramp_start_time = 0.0
         self.t_history.clear()
         self.omega_history.clear()
         self.torque_history.clear()
@@ -122,45 +148,67 @@ class SimulatorGUI:
             self.torque_limit.get()
         ])
 
-        # Reaction delay
-        self.reaction_steps = int(self.reaction_time.get() / self.dt)
-
-        omega = self.body.omega.copy()
-        omega_ref = np.array([
+        # Update attitude controller
+        self.attitude.kp = self.attitude_kp.get()
+        self.attitude.kd = self.attitude_kd.get()
+        slew_rate = self.slew_rate.get()
+        ramp_time = self.ramp_time.get()
+        
+        # Get new omega target
+        omega_target_new = np.array([
             self.omega_ref_x.get(),
             self.omega_ref_y.get(),
             self.omega_ref_z.get()
         ])
+        
+        # Check if target changed
+        if not np.allclose(omega_target_new, self.omega_target):
+            self.omega_target = omega_target_new
+            self.omega_ramp_start_time = self.time
 
-        # ------------------------
-        # PID control (PURE)
-        # ------------------------
-        rate_error = omega_ref - omega
-        torque_cmd = self.pid.step(rate_error)
+        # Sensor reading
+        omega_true = self.body.omega.copy()
+        z = self.imu.read(omega_true)
+        
+        # Kalman filter estimation
+        self.kf.predict()
+        omega_est, _ = self.kf.update(z)
+        omega_est = np.array(omega_est)
 
-        # Reaction delay queue
-        self.torque_queue.append(torque_cmd)
-        if len(self.torque_queue) > self.reaction_steps:
-            torque = self.torque_queue.pop(0)
+        # Attitude control
+        omega_ref_cmd = self.attitude.step(self.q_ref, self.body.q, omega_est)
+        omega_ref_cmd = np.clip(omega_ref_cmd, -self.omega_ref_max, self.omega_ref_max)
+        
+        # Apply ramp time to reach target omega
+        if ramp_time > 0:
+            time_since_change = self.time - self.omega_ramp_start_time
+            if time_since_change < ramp_time:
+                # Linear ramp from current to target
+                progress = time_since_change / ramp_time
+                omega_ref = self.omega_ref_prev + progress * (self.omega_target - self.omega_ref_prev)
+            else:
+                # Target reached
+                omega_ref = self.omega_target.copy()
         else:
-            torque = np.zeros(3)
+            # No ramp time, use target directly
+            omega_ref = self.omega_target.copy()
+        
+        self.omega_ref_prev = omega_ref.copy()
+
+
+        torque = kp * (omega_ref - omega_est) - kd * omega_est
+        
+        # Convert to numpy array if needed
+        if isinstance(torque, list):
+            torque = np.array(torque)
 
         # Dynamics
         self.body.step(torque)
-        omega = self.body.omega
-
-        # Omega saturation
-        omega = np.clip(
-            omega,
-            -self.omega_limit.get(),
-            self.omega_limit.get()
-        )
-        self.body.omega = omega
 
         # History
         self.time += self.dt
         self.t_history.append(self.time)
-        self.omega_history.append(omega.copy())
+        self.omega_history.append(self.body.omega.copy())
         self.torque_history.append(torque.copy())
 
         self.update_plot()
