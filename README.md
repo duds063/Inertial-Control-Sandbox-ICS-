@@ -39,23 +39,6 @@ ICS simulates a **rigid body under rotational control**:
 The system is deterministic, discrete-time, and suitable for
 controller prototyping and tuning.
 --- 
-## 📁 Project Structure
-ICS/
-├── system/
-│ └── rigid_body_nd.py # Rigid body rotational dynamics
-│
-├── controllers/
-│ └── pid.py # Multi-axis PID controller
-│
-├── estimators/
-│ └── kalman_bias_nd.py # (Optional) Kalman filter with bias estimation
-│
-├── sensors/
-│ └── gyro_nd.py # Gyroscope model with noise/bias
-│
-├── simulator_gui.py # Interactive GUI application
-├── main.py # Headless simulation / experiments
-└── README.md
 ---
 ## 🖥️ Running the GUI
 
