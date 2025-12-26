@@ -1,155 +1,194 @@
-import sys
+import tkinter as tk
+from tkinter import ttk
 import numpy as np
-import csv
-from PyQt5.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QPushButton,
-    QLabel, QDoubleSpinBox, QHBoxLayout, QGridLayout
-)
-from PyQt5.QtCore import QTimer
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-# Import your existing simulator
 from system.rigid_body_nd import RigidBody3D
-from sensors.gyro_nd import GyroND
-from estimators.kalman_nd import KalmanND
 from controllers.pid import PIDND
-from controllers.attitude import AttitudeController
-from math_utils.quaternion import quat_norm
 
-DT = 0.01
 
-class SimulatorGUI(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Flavortown Simulator GUI")
-        self.resize(900, 600)
+class SimulatorGUI:
+    def __init__(self, root):
+        self.root = root
+        root.title("Inertial Control Sandbox")
 
-        # ----------------- Simulator -----------------
-        self.rb = RigidBody3D(inertia=np.array([1.0,1.0,1.0]), dt=DT)
-        self.rb.q = quat_norm(np.array([0.98,0.1,-0.05,0.02]))
+        # ------------------------
+        # Simulation parameters
+        # ------------------------
+        self.dt = 0.01
+        self.time = 0.0
 
-        self.imu = GyroND(dim=3, noise_std=0.05, bias=[0.5,-0.25,0.1])
-        self.kf = KalmanND(dim=3, q_omega=1e-3, q_bias=1e-6, r=0.05**2)
-        self.attitude = AttitudeController(kp=6.0, kd=1.2)
-        self.pid = PIDND(
-            kp=[6,6,6], kd=[0.35,0.35,0.35], ki=[0.0,0.0,0.0],
-            dt=DT, torque_limit=[1.0,1.0,1.0], d_cutoff=15.0
+        self.reaction_steps = 0
+        self.torque_queue = []
+
+        # ------------------------
+        # System & controller
+        # ------------------------
+        self.inertia = np.array([1.0, 1.0, 1.0])
+
+        self.body = RigidBody3D(
+            inertia=self.inertia,
+            dt=self.dt
         )
 
-        self.Q_REF = np.array([1.0,0.0,0.0,0.0])
-        self.OMEGA_DES = np.array([0.05,0,0])
+        self.pid = PIDND(
+            kp=[2.0, 2.0, 2.0],
+            kd=[0.5, 0.5, 0.5],
+            ki=[0.0, 0.0, 0.0],
+            dt=self.dt,
+            torque_limit=[1.0, 1.0, 1.0]
+        )
 
-        self.step_counter = 0
+        # ------------------------
+        # History
+        # ------------------------
+        self.t_history = []
+        self.omega_history = []
+        self.torque_history = []
 
-        # ----------------- GUI -----------------
-        layout = QVBoxLayout()
+        # ------------------------
+        # GUI Controls
+        # ------------------------
+        self.controls = ttk.Frame(root)
+        self.controls.pack(side=tk.LEFT, fill=tk.Y, padx=10)
 
-        # Matplotlib figure
-        self.fig = Figure()
-        self.canvas = FigureCanvas(self.fig)
-        layout.addWidget(self.canvas)
+        def labeled_control(label, from_, to_, default):
+            ttk.Label(self.controls, text=label).pack(anchor="w")
 
-        self.ax_omega = self.fig.add_subplot(211)
-        self.ax_torque = self.fig.add_subplot(212)
+            var = tk.DoubleVar(value=default)
 
-        self.ax_omega.set_title("Angular Velocity (rad/s)")
-        self.ax_torque.set_title("Torque")
+            frame = ttk.Frame(self.controls)
+            frame.pack(fill=tk.X)
 
-        self.omega_history = np.zeros((3,1))
-        self.torque_history = np.zeros((3,1))
-        self.time_history = [0]
+            scale = ttk.Scale(frame, from_=from_, to=to_, variable=var)
+            scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # Controls
-        control_layout = QGridLayout()
-        self.kp_spin = [QDoubleSpinBox() for _ in range(3)]
-        self.kd_spin = [QDoubleSpinBox() for _ in range(3)]
-        self.omega_spin = [QDoubleSpinBox() for _ in range(3)]
+            entry = ttk.Entry(frame, width=7, textvariable=var)
+            entry.pack(side=tk.RIGHT)
 
-        for i in range(3):
-            self.kp_spin[i].setRange(0, 50); self.kp_spin[i].setValue(self.pid.kp[i])
-            self.kd_spin[i].setRange(0, 50); self.kd_spin[i].setValue(self.pid.kd[i])
-            self.omega_spin[i].setRange(-5, 5); self.omega_spin[i].setValue(self.OMEGA_DES[i])
-            control_layout.addWidget(QLabel(f"KP{i+1}"),0,i); control_layout.addWidget(self.kp_spin[i],1,i)
-            control_layout.addWidget(QLabel(f"KD{i+1}"),2,i); control_layout.addWidget(self.kd_spin[i],3,i)
-            control_layout.addWidget(QLabel(f"Ω{i+1}"),4,i); control_layout.addWidget(self.omega_spin[i],5,i)
+            return var
 
-        layout.addLayout(control_layout)
+        self.kp = labeled_control("Kp", 0, 10, 2)
+        self.kd = labeled_control("Kd", 0, 5, 0.5)
+        self.ki = labeled_control("Ki", 0, 5, 0.0)
 
-        # Start/Stop button
-        self.btn_start = QPushButton("Start Simulation")
-        self.btn_start.clicked.connect(self.toggle_simulation)
-        layout.addWidget(self.btn_start)
+        self.omega_ref_x = labeled_control("ω_ref X", -3, 3, 0)
+        self.omega_ref_y = labeled_control("ω_ref Y", -3, 3, 0)
+        self.omega_ref_z = labeled_control("ω_ref Z", -3, 3, 0)
 
-        self.setLayout(layout)
+        self.torque_limit = labeled_control("Torque limit (Nm)", 0.1, 5, 1)
+        self.omega_limit = labeled_control("Omega limit (rad/s)", 0.5, 10, 2)
+        self.reaction_time = labeled_control("Reaction time (s)", 0, 0.5, 1.5)
 
-        # Timer
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.simulation_step)
-        self.running = False
+        ttk.Button(
+            self.controls,
+            text="Reset",
+            command=self.reset
+        ).pack(pady=10)
 
-        # CSV logging
-        self.csv_file = open("sim_data.csv","w",newline="")
-        self.csv_writer = csv.writer(self.csv_file)
-        self.csv_writer.writerow(["time","omega_x","omega_y","omega_z","torque_x","torque_y","torque_z"])
+        # ------------------------
+        # Plot
+        # ------------------------
+        self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=(6, 5))
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.root)
+        self.canvas.get_tk_widget().pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-    def toggle_simulation(self):
-        if self.running:
-            self.timer.stop()
-            self.btn_start.setText("Start Simulation")
-            self.running = False
-        else:
-            self.timer.start(int(DT*1000))
-            self.btn_start.setText("Stop Simulation")
-            self.running = True
+        self.root.after(10, self.simulation_step)
 
+    # ------------------------
+    def reset(self):
+        self.time = 0.0
+        self.body.reset()
+        self.pid.reset()
+        self.torque_queue.clear()
+        self.t_history.clear()
+        self.omega_history.clear()
+        self.torque_history.clear()
+
+    # ------------------------
     def simulation_step(self):
-        # Update PID and desired values
-        self.pid.kp = [spin.value() for spin in self.kp_spin]
-        self.pid.kd = [spin.value() for spin in self.kd_spin]
-        self.OMEGA_DES = np.array([spin.value() for spin in self.omega_spin])
+        # Update controller parameters
+        kp = self.kp.get()
+        kd = self.kd.get()
+        ki = self.ki.get()
 
-        omega_true = self.rb.omega.copy()
-        z = self.imu.read(omega_true)
-        self.kf.predict()
-        omega_est, bias_est = self.kf.update(z)
-        omega_est = np.array(omega_est)
+        self.pid.kp = np.array([kp, kp, kp])
+        self.pid.kd = np.array([kd, kd, kd])
+        self.pid.ki = np.array([ki, ki, ki])
+        self.pid.torque_limit = np.array([
+            self.torque_limit.get(),
+            self.torque_limit.get(),
+            self.torque_limit.get()
+        ])
 
-        # Attitude control
-        omega_ref = self.attitude.step(self.Q_REF, self.rb.q, omega_est)
+        # Reaction delay
+        self.reaction_steps = int(self.reaction_time.get() / self.dt)
 
-        # Rate control
-        rate_error = self.OMEGA_DES - omega_est
-        torque = np.array(self.pid.step(rate_error, -omega_est))
-        self.rb.step(torque)
+        omega = self.body.omega.copy()
+        omega_ref = np.array([
+            self.omega_ref_x.get(),
+            self.omega_ref_y.get(),
+            self.omega_ref_z.get()
+        ])
 
-        # Update history
-        self.omega_history = np.hstack([self.omega_history, omega_true.reshape(3,1)])
-        self.torque_history = np.hstack([self.torque_history, torque.reshape(3,1)])
-        self.time_history.append(self.step_counter*DT)
-        self.step_counter += 1
+        # ------------------------
+        # PID control (PURE)
+        # ------------------------
+        rate_error = omega_ref - omega
+        torque_cmd = self.pid.step(rate_error)
 
-        # Update plots
-        self.ax_omega.clear(); self.ax_torque.clear()
-        self.ax_omega.plot(self.time_history, self.omega_history[0], label="ωx")
-        self.ax_omega.plot(self.time_history, self.omega_history[1], label="ωy")
-        self.ax_omega.plot(self.time_history, self.omega_history[2], label="ωz")
-        self.ax_omega.legend()
-        self.ax_omega.set_title("Angular Velocity (rad/s)")
+        # Reaction delay queue
+        self.torque_queue.append(torque_cmd)
+        if len(self.torque_queue) > self.reaction_steps:
+            torque = self.torque_queue.pop(0)
+        else:
+            torque = np.zeros(3)
 
-        self.ax_torque.plot(self.time_history, self.torque_history[0], label="τx")
-        self.ax_torque.plot(self.time_history, self.torque_history[1], label="τy")
-        self.ax_torque.plot(self.time_history, self.torque_history[2], label="τz")
-        self.ax_torque.legend()
-        self.ax_torque.set_title("Torque")
+        # Dynamics
+        self.body.step(torque)
+        omega = self.body.omega
+
+        # Omega saturation
+        omega = np.clip(
+            omega,
+            -self.omega_limit.get(),
+            self.omega_limit.get()
+        )
+        self.body.omega = omega
+
+        # History
+        self.time += self.dt
+        self.t_history.append(self.time)
+        self.omega_history.append(omega.copy())
+        self.torque_history.append(torque.copy())
+
+        self.update_plot()
+        self.root.after(10, self.simulation_step)
+
+    # ------------------------
+    def update_plot(self):
+        if len(self.t_history) < 2:
+            return
+
+        self.ax1.clear()
+        self.ax2.clear()
+
+        omega_hist = np.array(self.omega_history)
+        torque_hist = np.array(self.torque_history)
+
+        self.ax1.plot(self.t_history, omega_hist)
+        self.ax1.set_title("Angular Velocity (rad/s)")
+        self.ax1.grid()
+
+        self.ax2.plot(self.t_history, torque_hist)
+        self.ax2.set_title("Torque (Nm)")
+        self.ax2.grid()
+
         self.canvas.draw()
-
-        # Log to CSV
-        self.csv_writer.writerow([self.step_counter*DT, *omega_true, *torque])
 
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    gui = SimulatorGUI()
-    gui.show()
-    sys.exit(app.exec_())
+    root = tk.Tk()
+    app = SimulatorGUI(root)
+    root.mainloop()

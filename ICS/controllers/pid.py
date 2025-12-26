@@ -1,53 +1,33 @@
 # controllers/pid.py
 import numpy as np
-
 class PIDND:
-    def __init__(self, kp, kd, ki=None, dt=0.01, torque_limit=None, d_cutoff=20.0):
-        self.kp = kp
-        self.kd = kd
-        self.ki = ki if ki is not None else [0.0] * len(kp)
+    def __init__(self, kp, kd, ki, dt, torque_limit):
+        self.kp = np.array(kp)
+        self.kd = np.array(kd)
+        self.ki = np.array(ki)
         self.dt = dt
-        self.dim = len(kp)
+        self.torque_limit = np.array(torque_limit)
 
-        # filtro D
-        tau = 1.0 / (2 * np.pi * d_cutoff)
-        self.alpha = tau / (tau + dt)
-        self.d_filt = [0.0] * self.dim
+        self.integral = np.zeros(len(kp))
 
-        self.integral = [0.0] * self.dim
+    def reset(self):
+        self.integral[:] = 0.0
 
-        if torque_limit is None:
-            self.torque_limit = [float("inf")] * self.dim
-        else:
-            self.torque_limit = torque_limit
+    def step(self, error):
+        # Integral
+        self.integral += error * self.dt
 
-    def step(self, error, error_dot):
-        torque = []
+        # PID law
+        torque = (
+            self.kp * error
+            + self.ki * self.integral
+            - self.kd * error  # derivativo implícito (−ω)
+        )
 
-        for i in range(self.dim):
-            # integral
-            self.integral[i] += error[i] * self.dt
+        # Anti-windup (clamp-based)
+        saturated = np.abs(torque) > self.torque_limit
+        self.integral[saturated] -= error[saturated] * self.dt
 
-            # filtro passa-baixa no D
-            self.d_filt[i] = (
-                self.alpha * self.d_filt[i]
-                + (1 - self.alpha) * error_dot[i]
-            )
-
-            u = (
-                - self.kp[i] * error[i]
-                - self.kd[i] * self.d_filt[i]
-                - self.ki[i] * self.integral[i]
-            )
-
-            u_sat = max(
-                -self.torque_limit[i],
-                min(self.torque_limit[i], u)
-            )
-
-            if u != u_sat:
-                self.integral[i] -= error[i] * self.dt
-
-            torque.append(u_sat)
-
+        # Saturation
+        torque = np.clip(torque, -self.torque_limit, self.torque_limit)
         return torque

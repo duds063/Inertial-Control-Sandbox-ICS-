@@ -1,108 +1,114 @@
-# Inertial-Control-Sandbox-ICS-
-#Flavortown – 3D Rigid Body Simulator & Attitude Control Sandbox
+# Inertial Control Sandbox (ICS)
 
-Status: Prototype (Initial version complete, Day 3 – 25/12/25)
+The **Inertial Control Sandbox (ICS)** is a lightweight physics-based simulation
+environment for developing, testing, and visualizing attitude and angular-rate
+controllers for rigid bodies such as drones, satellites, and underwater vehicles.
 
-Overview
+It was designed to bridge the gap between theoretical control design and
+hands-on DIY experimentation.
 
-Flavortown is a Python-based 3D rigid body simulator designed to experiment with attitude control, sensor simulation, and control algorithms (PID + attitude control). It allows testing of angular velocity tracking and quaternion-based orientation management in a fully simulated environment, providing a flexible tool for hobbyists, researchers, and DIY robotics enthusiasts.
+---
 
-This platform is suitable for learning, prototyping, and algorithm testing for drones, USVs, and other robotic systems.
+## 🚀 Features
 
-Features
+- 3D rigid-body rotational dynamics
+- Multi-axis PID controller (P / PI / PID)
+- Torque saturation and angular velocity limits
+- Actuator reaction delay (reaction time)
+- Real-time interactive GUI (Tkinter + Matplotlib)
+- Live tuning of:
+  - Kp, Ki, Kd
+  - Angular rate references
+  - Torque and omega limits
+  - Reaction time
+- Time-domain plots for angular velocity and torque
+- Modular architecture (controllers, system, estimators)
 
-3D rigid body dynamics with quaternion-based attitude representation.
+---
 
-Simulated IMU with configurable noise and bias.
+## 🧠 What This Simulator Does
+ICS simulates a **rigid body under rotational control**:
 
-Kalman filter for angular velocity estimation.
+1. A desired angular velocity (`ω_ref`) is defined.
+2. A PID controller computes the required control torque.
+3. The torque is optionally delayed (reaction time).
+4. The rigid body integrates angular acceleration.
+5. Physical constraints (torque / omega limits) are enforced.
+6. Results are plotted in real time.
 
-Hybrid PID + Attitude control loop for tracking desired orientations.
-
-Adjustable torque and angular velocity constraints.
-
-Real-time logging of angular velocities, torques, and quaternions.
-
-Configurable simulation timestep for high-precision experiments.
-
-Installation
-
-Clone the repository:
-
-git clone https://github.com/yourusername/flavortown.git
-cd flavortown
-
-
-Install dependencies (Python 3.10+ recommended):
-
-pip install numpy
-
-
-(Additional packages may be required if extending the simulator.)
-
-Usage
-
-Run the main simulation script:
-
-python main.py
-
-
-Simulation prints logs every 10 steps:
-
-STEP 000 | OMEGA: [...] | OMEGA_REF: [...] | TORQUE: [...] | Q: [...]
-
-
-Parameters you can modify:
-
-Q_REF: Desired quaternion orientation.
-
-OMEGA_REF: Reference angular velocity.
-
-PID gains: kp, kd, ki.
-
-Torque/omega limits: can be removed for unrestricted simulation.
-
-STEPS and DT: Simulation duration and timestep.
-
-Code Structure
-flavortown/
+The system is deterministic, discrete-time, and suitable for
+controller prototyping and tuning.
+--- 
+## 📁 Project Structure
+ICS/
+├── system/
+│ └── rigid_body_nd.py # Rigid body rotational dynamics
 │
-├─ main.py               # Main simulation loop
-├─ system/
-│  └─ rigid_body_nd.py   # Rigid body dynamics engine
-├─ sensors/
-│  └─ gyro_nd.py         # IMU simulation
-├─ estimators/
-│  └─ kalman_nd.py       # Kalman filter for angular velocity
-├─ controllers/
-│  ├─ pid.py             # PID controller implementation
-│  └─ attitude.py        # Attitude controller (quaternion → ω_ref)
-└─ math_utils/
-   └─ quaternion.py      # Quaternion math utilities
+├── controllers/
+│ └── pid.py # Multi-axis PID controller
+│
+├── estimators/
+│ └── kalman_bias_nd.py # (Optional) Kalman filter with bias estimation
+│
+├── sensors/
+│ └── gyro_nd.py # Gyroscope model with noise/bias
+│
+├── simulator_gui.py # Interactive GUI application
+├── main.py # Headless simulation / experiments
+└── README.md
+---
+## 🖥️ Running the GUI
 
-Example Output
-STEP 000 | OMEGA: [ 0.0035 -0.0015  0.0014] | OMEGA_REF: [-0.01  0.01 -0.01] | TORQUE: [0.35 -0.15 0.14] | Q: [0.9933 0.1013 -0.0506 0.0202]
-STEP 010 | OMEGA: [ 0.0543 -0.0365  0.0175] | OMEGA_REF: [-0.11 0.11 -0.11] | TORQUE: [0.70 -0.38 0.17] | Q: [0.9931 0.1027 -0.0516 0.0207]
-...
+```bash
+python simulator_gui.py
+```
+The GUI allows real-time tuning of control parameters and immediate visualization
+of system response.
 
-Applications
+## 🎯 Intended Use Cases
+DIY drone flight controller prototyping
 
-Prototype and test flight controllers for DIY drones.
+USV / ROV attitude control testing
 
-Experiment with submarine and USV attitude control.
+Control theory experimentation
 
-Study PID tuning, sensor fusion, and quaternion math.
+PID tuning intuition development
 
-Educational tool for robotics, aerospace, and mechanical engineering.
+Educational demonstrations
 
-Notes
+Rapid controller debugging without hardware risk
 
-The simulation currently applies torque and angular velocity limits to maintain stability.
+## ⚠️ What This Is NOT
+ - Not a full flight stack (no navigation, no translation)
 
-Future versions may include hydrodynamics, aerodynamics, and hardware-in-the-loop (HIL) support.
+ - Not a high-fidelity CFD simulator
 
-Platform is not yet intended for real-world deployment, only for algorithm development and experimentation.
+ - Not hardware-in-the-loop (yet)
 
-License
+ICS focuses strictly on rotational dynamics and control.
 
-MIT License – feel free to use, modify, and extend.
+## 🧩 Design Philosophy
+ - Physics first: dynamics are explicit and transparent
+
+ - Modular components: controllers, sensors, estimators are swappable
+
+ - Interactive experimentation over black-box automation
+
+ - DIY-friendly: minimal dependencies, readable code
+
+## 🛠️ Future Improvements (Planned)
+ - Full separation between core simulation and GUI
+
+ - Quaternion-based attitude control mode
+
+ - Sensor noise toggles via GUI
+
+ - Data export (CSV) from GUI
+
+ - Alternative controllers (LQR, MPC)
+
+ - Hardware-in-the-loop support
+
+##  📜 License
+This project is intended for educational and experimental use.
+Feel free to fork, modify, and learn from it.
